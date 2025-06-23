@@ -25,6 +25,11 @@ Memory-Efficient Data Pipeline Design a data processing pipeline that:
    pip install -r requirements.txt
    ```
 
+3. Create .env file:
+   ```bash
+   cp .env.example .env
+   ```
+
 ## How to Run
 
 Start the API server using Uvicorn:
@@ -37,4 +42,11 @@ You can customize parameters such as host and port:
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Send a POST request:
+```bash
+curl -X POST http://localhost:8000/webhook \
+  -H "Content-Type: application/json" \
+  --data-binary @payload.json
 ```

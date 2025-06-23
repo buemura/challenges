@@ -1,20 +1,21 @@
 from datetime import datetime
 from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 import asyncio
 import asyncpg
 import json
 import os
 from aio_pika import connect_robust, Message
-from typing import AsyncIterator
+from typing import AsyncIterator, Union
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI()
-input_queue = asyncio.Queue()
+input_queue = asyncio.Queue(maxsize=10000)  # large buffer for burst tolerance
 
 
-# Output: Write + Publish
+# Output: Write to DB + Publish to MQ
 async def write_to_db(pool, data):
     async with pool.acquire() as conn:
         timestamp = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
@@ -28,20 +29,19 @@ async def publish_to_queue(channel, data):
     body = json.dumps(data).encode()
     message = Message(body)
     await channel.default_exchange.publish(
-        message,
-        routing_key="events"  # the queue must be bound to this key
+        message, routing_key="events"
     )
 
 
-# Generator
+# Event Generator
 async def event_streamer() -> AsyncIterator[dict]:
     while True:
-        item = await input_queue.get()
-        yield item
+        event = await input_queue.get()
+        yield event
         input_queue.task_done()
 
 
-# Aggregator
+# Aggregator / Transformer
 async def aggregator(pool, channel):
     user_action_count = {}
     async for event in event_streamer():
@@ -55,15 +55,28 @@ async def aggregator(pool, channel):
 # Webhook
 @app.post("/webhook")
 async def receive_json(request: Request):
-    data = await request.json()
-    await input_queue.put(data)
-    return {"status": "queued"}
+    payload = await request.body()
+
+    # Parse and stream items regardless of batch size
+    def parse_json_stream() -> Union[dict, list]:
+        parsed = json.loads(payload)
+        if isinstance(parsed, dict):
+            return [parsed]
+        elif isinstance(parsed, list):
+            return parsed
+        else:
+            raise ValueError("Invalid JSON format")
+
+    for item in parse_json_stream():
+        await input_queue.put(item)
+
+    return {"status": "queued", "received": len(parse_json_stream())}
 
 
 # Lifespan
-@app.on_event("startup")
-async def startup():
-    # Load DB config
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # DB setup
     db_pool = await asyncpg.create_pool(
         user=os.getenv("DB_USER", "admin"),
         password=os.getenv("DB_PASSWORD", "admin"),
@@ -71,13 +84,20 @@ async def startup():
         host=os.getenv("DB_HOST", "localhost")
     )
 
-    # Connect to RabbitMQ
-    rabbit_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost/")
+    # RabbitMQ setup
+    rabbit_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
     connection = await connect_robust(rabbit_url)
     channel = await connection.channel()
-
-    # Ensure the queue exists
     await channel.declare_queue("events", durable=True)
 
-    # Start aggregator
-    asyncio.create_task(aggregator(db_pool, channel))
+    # Run aggregator task
+    task = asyncio.create_task(aggregator(db_pool, channel))
+
+    yield
+
+    task.cancel()
+    await db_pool.close()
+    await connection.close()
+
+
+app.router.lifespan_context = lifespan
