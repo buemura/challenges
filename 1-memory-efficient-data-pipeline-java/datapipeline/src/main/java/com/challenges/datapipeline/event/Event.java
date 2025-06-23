@@ -9,15 +9,13 @@ public class Event {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    public Long id;
 
-    private int userId;
-    private String action;
+    public int userId;
+    public String action;
 
     @Column(columnDefinition = "TIMESTAMP WITH TIME ZONE")
-    private Instant timestamp;
-
-    public Event() {}
+    public Instant timestamp;
 
     public Event(int userId, String action, Instant timestamp) {
         this.userId = userId;
