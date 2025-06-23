@@ -10,3 +10,13 @@ services:
       - '5432:5432'
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    hostname: rabbitmq
+    ports:
+      - '5672:5672'    # RabbitMQ AMQP protocol
+      - '15672:15672'  # RabbitMQ Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
